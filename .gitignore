@@ -1,2 +1,5 @@
 docs/
 .env
+/GEMINI.md
+target/
+**/target/
