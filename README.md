@@ -41,44 +41,44 @@ flowchart TD
     end
 
     subgraph Perimeter ["Ingress Security Perimeter (DMZ)"]
-        Nginx["Nginx Reverse Proxy\n- TLS 1.3 / SSL Termination\n- Rate Limiting (100 req/min/IP)\n- Hardened Headers (HSTS, CSP)\n- Zero-Downtime Dynamic Upstream Switcher"]
+        Nginx["Nginx Reverse Proxy<br/>- TLS 1.3 / SSL Termination<br/>- Rate Limiting (100 req/min)<br/>- Hardened Headers (HSTS, CSP)<br/>- Zero-Downtime Dynamic Upstream"]
     end
 
     subgraph App_Cluster ["Application Layer (Blue-Green Slots)"]
-        BlueApp["Blue Container (v1.0.0)\nPort 8081 | Non-Root User\nRoutingDataSource (Read/Write)"]
-        GreenApp["Green Container (v1.0.1)\nPort 8082 | Non-Root User\nRoutingDataSource (Read/Write)"]
+        BlueApp["Blue Container (v1.0.0)<br/>Port 8081 | Non-Root User<br/>RoutingDataSource (Read/Write)"]
+        GreenApp["Green Container (v1.0.1)<br/>Port 8082 | Non-Root User<br/>RoutingDataSource (Read/Write)"]
     end
 
     subgraph Data_Tier ["Isolated Data Tier (No Public Exposure)"]
         subgraph Postgres_Cluster ["PostgreSQL 16 Cluster"]
-            PrimaryDB[("Primary DB (Writer)\n- ACID Transactions\n- Pessimistic Row Lock (FOR UPDATE)\n- Persistent Named Volume")]
-            ReadReplica[("Read Replica (Reader)\n- Offloads 85% Read Traffic\n- Route & Trip Searches")]
+            PrimaryDB[("Primary DB (Writer)<br/>- ACID Transactions<br/>- Pessimistic Row Lock (FOR UPDATE)<br/>- Persistent Named Volume")]
+            ReadReplica[("Read Replica (Reader)<br/>- Offloads 85% Read Traffic<br/>- Route & Trip Searches")]
         end
 
-        RedisCache[("Redis 7 In-Memory Cache\n- Sub-ms Route & Seat-Map Cache\n- Cache-Aside with Invalidation\n- Graceful Degradation Fallback")]
+        RedisCache[("Redis 7 In-Memory Cache<br/>- Sub-ms Route & Seat-Map Cache<br/>- Cache-Aside with Invalidation<br/>- Graceful Degradation Fallback")]
     end
 
     subgraph Observability ["Observability & Metrics"]
-        Prometheus["Prometheus Server\nScrapes /actuator/prometheus"]
-        Grafana["Grafana Dashboards\nVisualizes Latency, TPS, DB Pool"]
+        Prometheus["Prometheus Server<br/>Scrapes /actuator/prometheus"]
+        Grafana["Grafana Dashboards<br/>Visualizes Latency, TPS, DB Pool"]
     end
 
-    Client -->|HTTPS (Port 443)| Nginx
-    Nginx -->|Active Proxy Pass| BlueApp
-    Nginx -.->|Cutover Upstream| GreenApp
+    Client -->|"HTTPS (Port 443)"| Nginx
+    Nginx -->|"Active Proxy Pass"| BlueApp
+    Nginx -.->|"Cutover Upstream"| GreenApp
 
-    BlueApp -->|Writes: @Transactional| PrimaryDB
-    BlueApp -->|Reads: @Transactional readOnly=true| ReadReplica
-    BlueApp -->|Cache Read/Write| RedisCache
+    BlueApp -->|"Writes: Primary DB"| PrimaryDB
+    BlueApp -->|"Reads: Read Replica"| ReadReplica
+    BlueApp -->|"Cache Read / Write"| RedisCache
 
-    GreenApp -->|Writes: @Transactional| PrimaryDB
-    GreenApp -->|Reads: @Transactional readOnly=true| ReadReplica
-    GreenApp -->|Cache Read/Write| RedisCache
+    GreenApp -->|"Writes: Primary DB"| PrimaryDB
+    GreenApp -->|"Reads: Read Replica"| ReadReplica
+    GreenApp -->|"Cache Read / Write"| RedisCache
 
-    PrimaryDB -.->|Replication Stream| ReadReplica
-    Prometheus -->|Scrape Metrics (15s)| BlueApp
-    Prometheus -->|Scrape Metrics (15s)| GreenApp
-    Grafana -->|Query Time-Series| Prometheus
+    PrimaryDB -.->|"Replication Stream"| ReadReplica
+    Prometheus -->|"Scrape Metrics"| BlueApp
+    Prometheus -->|"Scrape Metrics"| GreenApp
+    Grafana -->|"Query Metrics"| Prometheus
 ```
 
 ---
