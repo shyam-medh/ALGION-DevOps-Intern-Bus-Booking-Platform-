@@ -29,6 +29,10 @@ public class TripService {
         this.tripSeatRepository = tripSeatRepository;
     }
 
+    public List<TripResponse> getAllTrips() {
+        return tripRepository.findAll().stream().map(this::mapToTripResponse).collect(Collectors.toList());
+    }
+
     public List<TripResponse> searchTrips(String origin, String destination, LocalDate travelDate) {
         LocalDateTime startOfDay = travelDate.atStartOfDay();
         LocalDateTime endOfDay = travelDate.atTime(LocalTime.MAX);
