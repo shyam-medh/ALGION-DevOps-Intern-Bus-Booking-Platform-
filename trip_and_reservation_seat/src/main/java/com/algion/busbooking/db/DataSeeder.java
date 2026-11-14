@@ -3,6 +3,7 @@ package com.algion.busbooking.db;
 import com.algion.busbooking.entity.*;
 import com.algion.busbooking.repository.*;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -14,6 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Component
+@Profile("!test")
 public class DataSeeder implements CommandLineRunner {
 
     private final RouteRepository routeRepository;

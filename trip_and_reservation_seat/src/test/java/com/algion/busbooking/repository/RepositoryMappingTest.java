@@ -46,7 +46,7 @@ class RepositoryMappingTest {
         assertThat(route.getId()).isNotNull();
 
         // 2. Create Bus & Seat
-        Bus bus = busRepository.save(new Bus("MH-12-AB-1234", "AC_SEATER", 40));
+        Bus bus = busRepository.save(new Bus("MH-TEST-REPO-01", "AC_SEATER", 40));
         Seat seat = seatRepository.save(new Seat(bus, "1A", "WINDOW", "LOWER"));
         assertThat(seat.getId()).isNotNull();
 
