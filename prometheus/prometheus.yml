@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: 'bus-booking-api'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['app:8080', 'app-blue:8080', 'app-green:8080']
+        labels:
+          application: 'bus-booking-platform'
+          environment: 'production'
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

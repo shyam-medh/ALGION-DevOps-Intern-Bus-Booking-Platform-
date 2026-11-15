@@ -147,3 +147,108 @@ To eliminate deployment downtime:
 | **CI/CD** | Jenkins & GitHub Actions | Declarative | Automated test execution, Trivy container security scans, version tagging |
 | **Observability** | Prometheus & Grafana | Latest | Scrapes Spring Actuator metrics; visualizes latency, TPS, DB pool |
 | **Infrastructure (IaC)** | Terraform (AWS) | 1.15.x | Automated provisioning of AWS VPC, RDS Multi-AZ + Read Replica, EC2, ECR |
+
+---
+
+## 4. Quickstart Guide (1-Command Local Execution)
+
+### 4.1 Prerequisites
+- Docker & Docker Compose
+- Java 21 LTS & Maven 3.9+ (optional for local JAR builds)
+
+### 4.2 Start the Complete Platform
+Clone the repository and launch all services:
+```bash
+# 1. Clone repository
+git clone https://github.com/shyam-medh/ALGION-DevOps-Intern-Bus-Booking-Platform-.git
+cd ALGION-DevOps-Intern-Bus-Booking-Platform-
+
+# 2. Copy environment template
+cp .env.example .env
+
+# 3. Launch all containers
+docker compose up -d --build
+```
+
+### 4.3 Verify Running Services
+```bash
+docker compose ps
+```
+All four containers (`algion-bus-booking-api`, `algion-postgres-db`, `algion-redis-cache`, `algion-nginx-proxy`) will report **`(healthy)`**.
+
+---
+
+## 5. API Reference & Verification Examples
+
+### 5.1 Route Discovery
+```bash
+curl -k https://localhost/api/v1/routes
+```
+
+### 5.2 Search Trips
+```bash
+curl -k "https://localhost/api/v1/trips?origin=Mumbai&destination=Pune"
+```
+
+### 5.3 Fetch Real-Time Seat Availability
+```bash
+# Replace TRIP_ID with an ID returned from the search above
+curl -k https://localhost/api/v1/trips/{TRIP_ID}/seats
+```
+
+### 5.4 Reserve a Seat (Atomic Concurrency-Safe Booking)
+```bash
+curl -k -X POST https://localhost/api/v1/bookings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tripId": "TRIP_UUID_HERE",
+    "travelDate": "2026-11-20",
+    "boardingStop": "Dadar, Mumbai",
+    "dropStop": "Swargate, Pune",
+    "customerName": "Rahul Sharma",
+    "customerEmail": "rahul@example.com",
+    "customerPhone": "+919876543210",
+    "passengers": [
+      {
+        "fullName": "Rahul Sharma",
+        "age": 28,
+        "gender": "MALE",
+        "seatNumber": "1A"
+      }
+    ]
+  }'
+```
+*Returns `201 Created` with unique secure PNR `ALG-2026-XXXX`. A simultaneous booking for `1A` returns `409 Conflict`.*
+
+### 5.5 PNR Ticket Lookup & Cancellation
+```bash
+# Lookup by PNR
+curl -k https://localhost/api/v1/bookings/ALG-2026-XXXX
+
+# Cancel and release seat
+curl -k -X POST https://localhost/api/v1/bookings/ALG-2026-XXXX/cancel
+```
+
+---
+
+## 6. Automated Testing Suite
+
+Run the full automated test suite (including the 10-thread simultaneous race condition test and MockMvc HTTP contract tests):
+```bash
+cd trip_and_reservation_seat
+mvn clean test
+```
+*Result: **17/17 tests passing (`BUILD SUCCESS`)**.*
+
+---
+
+## 7. Operations, CI/CD & Infrastructure Links
+
+- **Production SRE Runbook**: [`RUNBOOK.md`](RUNBOOK.md)
+- **Zero-Downtime Blue-Green Deployment Script**: [`scripts/deploy-blue-green.sh`](scripts/deploy-blue-green.sh)
+- **Emergency Rollback Script**: [`scripts/rollback.sh`](scripts/rollback.sh)
+- **Automated Backup & Restore Scripts**: [`scripts/backup-db.sh`](scripts/backup-db.sh) / [`scripts/restore-db.sh`](scripts/restore-db.sh)
+- **Chaos Recovery Drill**: [`scripts/chaos-drill.sh`](scripts/chaos-drill.sh)
+- **CI/CD Pipeline**: [`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml) and [`Jenkinsfile`](Jenkinsfile)
+- **AWS Terraform Configuration**: [`terraform/`](terraform/)
+

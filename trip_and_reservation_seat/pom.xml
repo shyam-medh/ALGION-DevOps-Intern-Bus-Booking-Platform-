@@ -46,6 +46,13 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!-- SpringDoc OpenAPI / Swagger UI (Spring Boot 3) -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>2.6.0</version>
+        </dependency>
+
         <!-- PostgreSQL Database Driver (Production & Docker) -->
         <dependency>
             <groupId>org.postgresql</groupId>
