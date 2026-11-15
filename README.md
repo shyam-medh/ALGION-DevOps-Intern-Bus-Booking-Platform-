@@ -132,6 +132,101 @@ To eliminate deployment downtime:
 * **Metrics**: Prometheus scrapes `/actuator/prometheus` every 15s; pre-provisioned Grafana dashboards display HTTP throughput, response time p99, database connection pool saturation, and booking rates.
 * **Automated Disaster Recovery**: Scripted automated backups (`scripts/backup-db.sh`) generate compressed `pg_dump` archives with cryptographic **SHA-256 checksums**. Verified by a restore script (`scripts/restore-db.sh`).
 
+### 2.6 Relational Database Schema & Domain Model
+
+```mermaid
+erDiagram
+    BUS_ROUTES ||--o{ TRIPS : "schedules"
+    TRIPS ||--o{ TRIP_SEATS : "contains 20-40"
+    TRIP_SEATS ||--o| BOOKINGS : "reserved_by"
+    BOOKINGS ||--|{ PASSENGERS : "holds"
+
+    BUS_ROUTES {
+        uuid id PK
+        string origin "e.g. Mumbai"
+        string destination "e.g. Pune"
+        int distance_km "150"
+        int estimated_duration_minutes "210"
+        boolean active "true"
+    }
+
+    TRIPS {
+        uuid id PK
+        uuid route_id FK
+        string bus_number "MH-12-AB-1234"
+        string bus_type "VOLVO_MULTI_AXLE_AC_SLEEPER"
+        datetime departure_time "2026-11-20T06:00:00"
+        datetime arrival_time "2026-11-20T09:30:00"
+        decimal base_fare "650.00"
+        string status "SCHEDULED"
+    }
+
+    TRIP_SEATS {
+        uuid id PK
+        uuid trip_id FK "Composite Unique (trip_id, seat_number)"
+        string seat_number "1A, 1B, 2A..."
+        string seat_type "SLEEPER_LOWER"
+        decimal fare_multiplier "1.0"
+        string status "AVAILABLE / LOCKED / BOOKED"
+    }
+
+    BOOKINGS {
+        uuid id PK
+        string pnr UK "ALG-2026-XXXX (Indexed Unique)"
+        uuid trip_id FK
+        date travel_date
+        string boarding_stop
+        string drop_stop
+        string customer_name
+        string customer_email
+        string customer_phone
+        decimal total_amount
+        string status "CONFIRMED / CANCELLED"
+        datetime created_at
+    }
+
+    PASSENGERS {
+        uuid id PK
+        uuid booking_id FK
+        string full_name
+        int age
+        string gender
+        string seat_number
+    }
+```
+
+---
+
+### 2.7 Network & Port Allocation Map
+
+| Service | Container Name | Host Port | Internal Port | Network Binding | Purpose |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Edge Proxy** | `algion-nginx-proxy` | `80` (HTTP) | `80` | `frontend-net` | Auto-redirects all traffic to HTTPS (301 Moved Permanently) |
+| **Secure Ingress**| `algion-nginx-proxy` | `443` (HTTPS) | `443` | `frontend-net` | SSL/TLS Termination, Rate Limiting (100 req/min), Upstream Routing |
+| **Spring Boot API**| `algion-bus-booking-api`| *None (Shielded)*| `8080` | `frontend-net`, `backend-net` | Core Domain Service, Actuator Probes, Swagger UI |
+| **PostgreSQL 16** | `algion-postgres-db` | *None (Shielded)*| `5432` | `backend-net` (`internal: true`)| Primary ACID Store, Pessimistic Row Locking, Persistent Volume |
+| **Redis 7** | `algion-redis-cache` | *None (Shielded)*| `6379` | `backend-net` (`internal: true`)| High-speed cache for routes and seat availability |
+
+> [!SECURITY NOTE]
+> Ports `8080`, `5432`, and `6379` are deliberately **not exposed** to the host machine. All external traffic must pass through the Nginx reverse proxy over HTTPS.
+
+---
+
+### 2.8 Environment Configuration Variables
+
+All operational variables are loaded through `.env` (validated against `.env.example`):
+
+| Variable Name | Default / Example Value | Description |
+| :--- | :--- | :--- |
+| `SPRING_PROFILES_ACTIVE` | `docker` | Activates Docker-specific Spring profiles and datasource configs |
+| `SPRING_DATASOURCE_URL` | `jdbc:postgresql://postgres:5432/bus_booking_db` | Direct JDBC connection string to the isolated container |
+| `SPRING_DATASOURCE_USERNAME`| `postgres` | Database superuser account |
+| `SPRING_DATASOURCE_PASSWORD`| *(Strong secret from .env)* | Database password (never committed to Git) |
+| `SPRING_DATA_REDIS_HOST` | `redis` | Internal hostname for the in-memory cache |
+| `SPRING_DATA_REDIS_PORT` | `6379` | Redis port on isolated backend network |
+| `APP_PORT` | `8080` | Internal container port for the Java microservice |
+| `RATE_LIMIT_PER_MINUTE` | `100` | Nginx leaky-bucket rate limiting threshold per client IP |
+
 ---
 
 ## 3. Technology Stack Summary
@@ -251,4 +346,19 @@ mvn clean test
 - **Chaos Recovery Drill**: [`scripts/chaos-drill.sh`](scripts/chaos-drill.sh)
 - **CI/CD Pipeline**: [`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml) and [`Jenkinsfile`](Jenkinsfile)
 - **AWS Terraform Configuration**: [`terraform/`](terraform/)
+
+---
+
+## 8. Scope Boundaries, Assumptions & Known Limitations
+
+Per the assessment brief (*Section 1 & Section 7: "Build a strong, correct MVP rather than many incomplete screens. State clearly what is unfinished."*):
+
+1. **Allocated Service Scope (In-Scope)**:
+   - Complete backend lifecycle for bus routes, scheduled trips, dynamic seat availability maps, concurrency-safe seat booking with pessimistic row-locking (`PESSIMISTIC_WRITE`), PNR ticket generation, and booking cancellation with atomic seat release.
+   - Comprehensive DevOps deliverables: Multi-stage non-root containerization, internal Docker networking isolation, Nginx reverse proxy with TLS and rate-limiting, Blue-Green zero-downtime deployment engine, disaster recovery backup/restore with SHA-256 validation, Prometheus observability probes, and modular AWS Terraform IaC.
+2. **Intentionally Out of Scope (By Design)**:
+   - **Frontend UI Client**: Omitted in strict compliance with the brief's directive to prioritize release engineering, reliability, and operations over consumer screen breadth.
+   - **Live Commercial Payment Gateway**: Payment credentials and third-party webhooks (e.g. Razorpay/Stripe) are mocked out to avoid committing live secrets or requiring paid external sandbox credentials.
+   - **Multi-region Global Replication**: The relational database is architected for single-region Multi-AZ deployment (as modelled in `terraform/modules/rds`), with synchronous primary-replica replication. Multi-region active-active database replication is considered out of scope for this individual microservice.
+
 
