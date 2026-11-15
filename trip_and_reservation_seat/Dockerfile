@@ -2,8 +2,9 @@
 FROM maven:3.9.6-eclipse-temurin-21-alpine AS builder
 WORKDIR /app
 COPY pom.xml .
+COPY settings.xml .
 COPY src ./src
-RUN mvn clean package -DskipTests -B
+RUN mvn clean package -DskipTests -B -s settings.xml -Dmaven.wagon.http.retryHandler.count=5 -Dmaven.wagon.http.retryHandler.requestSentKeepAliveRuntime=true
 
 # Stage 2: Hardened Minimal Runtime
 FROM eclipse-temurin:21-jre-alpine AS runner
