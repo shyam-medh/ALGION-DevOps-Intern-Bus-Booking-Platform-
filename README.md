@@ -1,138 +1,77 @@
-# Bus Booking Platform – Cloud Deployment & CI/CD
-**Company Assessment**: ALGIONS AI LABS PRIVATE LIMITED  
-**Track**: DevOps & Cloud Engineering | Advanced Individual Assessment  
-**Allocated Domain**: Bus Trip & Seat Reservation API  
+# Bus Booking Platform – Trip & Seat Reservation API
+A production-grade, highly secure, observable, and resilient microservice for bus trip management and seat reservations, built for the **ALGIONS AI LABS PRIVATE LIMITED** DevOps & Cloud Engineering Assessment.
+
+This system provides comprehensive capabilities for discovering intercity bus routes, searching scheduled trips, inspecting real-time interactive seat maps, and processing atomic seat reservations. It strictly eliminates double-booking race conditions under high concurrency using PostgreSQL row-level pessimistic locking (`PESSIMISTIC_WRITE`), provides zero-downtime Blue-Green deployment, automated disaster recovery with SHA-256 integrity verification, and is shielded by an Nginx reverse proxy with TLS 1.3 encryption and leaky-bucket rate limiting.
 
 ---
 
-## 1. Problem Statement
-
-### 1.1 The Business & Engineering Challenge
-In online passenger transport systems, reservation platforms must process thousands of concurrent search and booking requests while maintaining absolute transactional integrity and high service availability. 
-
-The core challenges identified in the assessment brief are:
-1. **The Concurrency & Double-Booking Problem**: Multiple users frequently view and attempt to reserve the same seat simultaneously (e.g., during rush hours or flash bookings). The system must strictly eliminate race conditions: **conflicting seat reservations must fail safely and must never generate duplicate confirmed bookings or duplicate PNRs**.
-2. **High-Volume Database Retrieval**: Over 85% of traffic consists of read-heavy searches (browsing routes, filtering trips by date, and fetching seat availability). Directly querying a single database under high concurrency causes connection pool exhaustion and query bottlenecks.
-3. **Zero-Downtime Release Requirement**: Deploying new application versions must not disrupt in-flight customer bookings, terminate existing HTTP connections, or result in 502/504 gateway dropouts.
-4. **Resilience, Observability & Recovery**: The platform must feature continuous health probing (`/healthz`, `/ready`), structured logs with correlation IDs, Prometheus metrics, and automated database backup/restore procedures with cryptographic integrity verification.
-5. **Security & Least Privilege**: The service must be shielded by an ingress reverse proxy with TLS/HTTPS encryption, IP rate limiting to prevent brute-force attacks, non-root container isolation, and zero committed credentials.
-
-### 1.2 Domain Scope & Scope Boundaries
-* **In Scope (Production-Hardened Core Service)**:
-  * Route discovery (`GET /api/v1/routes`)
-  * Trip search with origin, destination, and travel date filtering (`GET /api/v1/trips`, `GET /api/v1/trips/{id}`)
-  * Real-time seat map availability layout (`GET /api/v1/trips/{id}/seats`)
-  * Atomic booking reservation with concurrency safety (`POST /api/v1/bookings`)
-  * PNR ticket retrieval (`GET /api/v1/bookings/{pnr}`)
-  * Booking cancellation and atomic seat release (`POST /api/v1/bookings/{pnr}/cancel`)
-  * Health, readiness, and Prometheus metrics probes (`/actuator/health/readiness`, `/actuator/prometheus`)
-* **Intentionally Out of Scope (By Design per Brief § 1 & § 7)**:
-  * *Monolithic Passenger UI*: Omitted to direct 100% of engineering bandwidth toward build, release, containerization, reliability, and cloud operations.
-  * *Live Payment Gateway Credentials*: Replaced with a transactional payment token mock to strictly comply with credential safety guidelines.
+## 1. Features
+* **Route & Trip Discovery**: APIs to browse active routes and search scheduled trips with origin, destination, and travel date filters.
+* **Real-Time Seat Maps**: Dynamic seat availability grid (`AVAILABLE`, `LOCKED`, `BOOKED`) with tier multipliers (Sleeper Lower, Sleeper Upper, Seater).
+* **Concurrency-Safe Atomic Bookings**: Prevents double-booking race conditions during simultaneous reservation requests using database-level pessimistic locking (`PESSIMISTIC_WRITE` / `SELECT ... FOR UPDATE`).
+* **PNR Generation & Lifecycle**: Secure alphanumeric PNR generation (`ALG-YYYY-XXXX`) and atomic cancellation releasing seats back to `AVAILABLE`.
+* **Zero-Downtime Releases**: Blue-Green deployment engine with dynamic Nginx upstream cutover and sub-second instant rollback.
+* **Security & Hardening**: Ingress TLS 1.3 reverse proxy, leaky-bucket rate limiting (100 req/min/IP), hardened HTTP security headers, unprivileged non-root container user (`appuser` UID 10001), and dual-network backend isolation (`internal: true`).
+* **Production Observability**: Spring Boot Actuator liveness and custom readiness health probes with deep PostgreSQL ping verification and Prometheus metrics scraping.
+* **Disaster Recovery**: Automated database backup scripts generating compressed `pg_dump` archives with cryptographic SHA-256 checksums and automated restore validation.
 
 ---
 
-## 2. How We Tackle It (System Architecture & Strategy)
+## 2. Technology Stack
+* **Java 21 LTS** & **Spring Boot 3.3.5** (Web MVC, Data JPA, Validation, Actuator)
+* **PostgreSQL 16** (ACID transactional datastore, pessimistic row locking, persistent storage)
+* **Redis 7** (In-memory caching layer with TTL eviction and graceful degradation fallback)
+* **Nginx 1.25 Alpine** (Ingress reverse proxy, SSL/TLS termination, rate limiting, security headers)
+* **Docker & Docker Compose** (Multi-stage build, non-root user, dual bridge networks)
+* **Docker Hub Registry**: `shyammedh/bus-booking-platform:1.0.0`
+* **GitHub Actions & Jenkins** (Automated compilation, JUnit testing, Trivy container CVE scans)
+* **SpringDoc OpenAPI v2.6.0** (Interactive Swagger UI documentation)
+* **JUnit 5 & MockMvc** (17 comprehensive unit, integration, and multi-threaded concurrency tests)
+* **Terraform (AWS)** (Modularized Infrastructure as Code: Multi-AZ VPC, RDS, ECR, EC2)
 
-```mermaid
-flowchart TD
-    subgraph Internet ["Public Internet / Client Layer"]
-        Client["Client / Automated Assessment Drills / Reviewer"]
-    end
+---
 
-    subgraph Perimeter ["Ingress Security Perimeter (DMZ)"]
-        Nginx["Nginx Reverse Proxy<br/>- TLS 1.3 / SSL Termination<br/>- Rate Limiting (100 req/min)<br/>- Hardened Headers (HSTS, CSP)<br/>- Zero-Downtime Dynamic Upstream"]
-    end
+## 3. Project Structure
+The microservice strictly enforces a Clean Layered Architecture with complete separation of concerns:
 
-    subgraph App_Cluster ["Application Layer (Blue-Green Slots)"]
-        BlueApp["Blue Container (v1.0.0)<br/>Port 8081 | Non-Root User<br/>RoutingDataSource (Read/Write)"]
-        GreenApp["Green Container (v1.0.1)<br/>Port 8082 | Non-Root User<br/>RoutingDataSource (Read/Write)"]
-    end
-
-    subgraph Data_Tier ["Isolated Data Tier (No Public Exposure)"]
-        subgraph Postgres_Cluster ["PostgreSQL 16 Cluster"]
-            PrimaryDB[("Primary DB (Writer)<br/>- ACID Transactions<br/>- Pessimistic Row Lock (FOR UPDATE)<br/>- Persistent Named Volume")]
-            ReadReplica[("Read Replica (Reader)<br/>- Offloads 85% Read Traffic<br/>- Route & Trip Searches")]
-        end
-
-        RedisCache[("Redis 7 In-Memory Cache<br/>- Sub-ms Route & Seat-Map Cache<br/>- Cache-Aside with Invalidation<br/>- Graceful Degradation Fallback")]
-    end
-
-    subgraph Observability ["Observability & Metrics"]
-        Prometheus["Prometheus Server<br/>Scrapes /actuator/prometheus"]
-        Grafana["Grafana Dashboards<br/>Visualizes Latency, TPS, DB Pool"]
-    end
-
-    Client -->|"HTTPS (Port 443)"| Nginx
-    Nginx -->|"Active Proxy Pass"| BlueApp
-    Nginx -.->|"Cutover Upstream"| GreenApp
-
-    BlueApp -->|"Writes: Primary DB"| PrimaryDB
-    BlueApp -->|"Reads: Read Replica"| ReadReplica
-    BlueApp -->|"Cache Read / Write"| RedisCache
-
-    GreenApp -->|"Writes: Primary DB"| PrimaryDB
-    GreenApp -->|"Reads: Read Replica"| ReadReplica
-    GreenApp -->|"Cache Read / Write"| RedisCache
-
-    PrimaryDB -.->|"Replication Stream"| ReadReplica
-    Prometheus -->|"Scrape Metrics"| BlueApp
-    Prometheus -->|"Scrape Metrics"| GreenApp
-    Grafana -->|"Query Metrics"| Prometheus
+```text
+bus_booking_algion/
+├── .github/workflows/ci-cd.yml     # GitHub Actions Pipeline (Test, Trivy Scan, Docker Hub Push)
+├── nginx/                          # Reverse Proxy & Ingress TLS
+│   ├── nginx.conf                  # Rate-limiting, SSL configuration, security headers
+│   ├── upstream.conf               # Dynamic Blue-Green upstream definition
+│   └── certs/                      # TLS/SSL certificates and RSA keys
+├── prometheus/                     # Prometheus scraping configuration
+├── scripts/                        # Production SRE Automation Engine
+│   ├── deploy-blue-green.sh        # Zero-downtime Blue-Green deployment cutover
+│   ├── rollback.sh                 # Sub-second emergency rollback script
+│   ├── backup-db.sh                # Automated gzip backup with SHA-256 checksums
+│   ├── restore-db.sh               # Verified disaster recovery restore script
+│   └── chaos-drill.sh              # SRE failure injection and recovery drill
+├── terraform/                      # Modular AWS Infrastructure as Code
+│   ├── main.tf                     # Root Terraform orchestration
+│   └── modules/ (vpc, security, rds, ecr, compute)
+├── trip_and_reservation_seat/      # Core Spring Boot Domain Service
+│   ├── Dockerfile                  # Multi-stage Temurin-21 Alpine Dockerfile (non-root)
+│   ├── pom.xml                     # Maven project descriptor
+│   └── src/main/java/com/algion/busbooking/
+│       ├── config/                 # Swagger OpenAPI & DataSeeder initialization
+│       ├── controller/             # REST controllers (Route, Trip, Booking)
+│       ├── dto/                    # API Request/Response data transfer contracts
+│       ├── entity/                 # Relational domain JPA entities
+│       ├── exception/              # Global @RestControllerAdvice exception mapping
+│       ├── repository/             # Spring Data JPA repositories with @Lock
+│       └── service/                # Business logic & transactional boundaries
+├── docker-compose.yml              # Standard production orchestration
+├── docker-compose.blue-green.yml   # Blue-Green dual-slot deployment orchestration
+├── RUNBOOK.md                      # Operational SRE Incident & Triage Manual
+└── README.md                       # Master Architecture & Submission Dossier
 ```
 
 ---
 
-### 2.1 Solving the Concurrency Race Condition (Zero Duplicate Bookings)
-To prevent race conditions when multiple clients reserve the same seat simultaneously:
-* **Pessimistic Row-Level Locking (`PESSIMISTIC_WRITE` / `SELECT ... FOR UPDATE`)**:
-  When a booking request arrives, an atomic database transaction begins. The service executes a query locking the requested `trip_seat` row.
-  * **Thread 1 (First Client)**: Acquires exclusive row lock, verifies seat is `AVAILABLE`, updates status to `BOOKED`, creates the booking record, generates the unique PNR, and commits.
-  * **Thread 2 (Second Client)**: Blocks waiting for the lock. Upon acquiring the lock, it reads the updated state: the seat is already `BOOKED`. The transaction safely rolls back and immediately returns an HTTP `409 Conflict` ("Seat is already booked").
-* **Schema-Level Constraints**: A composite unique constraint on `(trip_id, seat_id)` guarantees at the relational engine level that two confirmed bookings can never point to the same seat.
-* **Automated Proof**: A multi-threaded test (`BookingConcurrencyTest`) fires 20 simultaneous threads at the exact same seat, asserting that exactly 1 booking succeeds (HTTP 201) and 19 fail safely (HTTP 409) with 0 duplicate PNRs.
-
----
-
-### 2.2 Optimizing Database Retrieval (Read-Write Splitting & Redis Caching)
-To achieve sub-millisecond retrieval and scale search throughput:
-1. **Read-Write Splitting (`RoutingDataSource`)**:
-   * All read queries (`GET /routes`, `GET /trips`, `GET /trips/{id}/seats`) use `@Transactional(readOnly = true)` and are dynamically routed to the **PostgreSQL Read Replica**, offloading read traffic.
-   * Write mutations (`POST /bookings`, `POST /bookings/{pnr}/cancel`) use `@Transactional` and are directed to the **Primary Database**.
-2. **Redis In-Memory Caching (Cache-Aside)**:
-   * Frequently queried routes, trips, and seat maps are cached in Redis with a 300-second TTL.
-   * When a booking is confirmed or cancelled, the cache for that specific trip is automatically evicted to ensure zero stale seat maps.
-   * **Graceful Degradation**: If Redis is offline or restarting, a fallback handler catches connection exceptions and queries the database directly, ensuring uninterrupted user traffic.
-3. **Database Indexing**: Targeted B-Tree composite indexes on `(route_id, departure_time)` and `(trip_id, seat_id)` ensure $O(\log N)$ search speed.
-
----
-
-### 2.3 Zero-Downtime Blue-Green Deployment & Instant Rollback
-To eliminate deployment downtime:
-1. Two identical container slots exist: **Blue (Port 8081)** and **Green (Port 8082)**.
-2. During release, the deployment engine spins up the target idle slot (e.g., Green) with the new image.
-3. The engine continuously polls `/actuator/health/readiness` until the target slot returns `200 OK` (verifying database and Redis connectivity).
-4. Once verified, the Nginx reverse proxy configuration is updated and reloaded with **`nginx -s reload`** (hot reload, zero packet drops).
-5. Old slot (Blue) is gracefully terminated.
-6. **Instant Rollback**: If health checks fail or an incident occurs, `./scripts/rollback.sh` instantly reverts Nginx traffic back to the previous slot in < 500ms.
-
----
-
-### 2.4 End-to-End Security Architecture
-* **Ingress Protection**: Nginx reverse proxy enforces TLS 1.3 encryption (HTTPS), rate limits traffic (100 req/min/IP) to thwart DDoS attacks, and injects hardened HTTP headers (`Strict-Transport-Security`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy`).
-* **Container Hardening**: Multi-stage Dockerfile running as an unprivileged non-root user (`appuser`, UID 10001).
-* **Data Tier Isolation**: PostgreSQL and Redis are bound exclusively to an internal Docker network (`backend-net`) with **no public port exposure**.
-* **Zero Committed Secrets**: All configuration is injected via `.env` files or AWS Secrets Manager. A template `.env.example` is provided; `.env` is strictly ignored by Git.
-
----
-
-### 2.5 Observability, Logging & Disaster Recovery
-* **Health Probes**: `/actuator/health/liveness` (process liveness) and `/actuator/health/readiness` (dependency health testing PostgreSQL Primary, Read Replica, and Redis).
-* **Structured Logging**: Logback produces structured JSON logs containing timestamp, log level, message, and correlation IDs (`X-Correlation-Id`) for distributed request tracing.
-* **Metrics**: Prometheus scrapes `/actuator/prometheus` every 15s; pre-provisioned Grafana dashboards display HTTP throughput, response time p99, database connection pool saturation, and booking rates.
-* **Automated Disaster Recovery**: Scripted automated backups (`scripts/backup-db.sh`) generate compressed `pg_dump` archives with cryptographic **SHA-256 checksums**. Verified by a restore script (`scripts/restore-db.sh`).
-
-### 2.6 Relational Database Schema & Domain Model
+## 4. Database Schema Overview
+The relational datastore utilizes a normalized, constraint-enforced PostgreSQL schema:
 
 ```mermaid
 erDiagram
@@ -195,64 +134,102 @@ erDiagram
     }
 ```
 
+* **`bus_routes`**: Master catalog of intercity transit corridors.
+* **`trips`**: Daily scheduled bus journeys linked to a route, bus number, and timetable.
+* **`trip_seats`**: Individual physical inventory items with unique compound constraint `(trip_id, seat_number)`.
+* **`bookings`**: Confirmed customer reservations identified by an indexed, unique PNR.
+* **`passengers`**: Passenger details linked to a confirmed booking.
+
 ---
 
-### 2.7 Network & Port Allocation Map
+## 5. PostgreSQL Concurrency Protection (Zero Double Bookings)
+To definitively eliminate double-booking race conditions when multiple passengers contest the same seat simultaneously:
 
+1. **Pessimistic Row-Level Locking (`PESSIMISTIC_WRITE` / `SELECT ... FOR UPDATE`)**:
+   In `TripSeatRepository`, seat lookup is executed under an exclusive row lock:
+   ```java
+   @Lock(LockModeType.PESSIMISTIC_WRITE)
+   @Query("SELECT s FROM TripSeat s WHERE s.trip.id = :tripId AND s.seatNumber = :seatNumber")
+   Optional<TripSeat> findByTripIdAndSeatNumberForUpdate(@Param("tripId") UUID tripId, @Param("seatNumber") String seatNumber);
+   ```
+2. **Transaction Serialization**:
+   * **Thread 1**: Acquires exclusive row lock on the seat. Reads state (`AVAILABLE`), marks status as `BOOKED`, creates booking entity, generates PNR, and commits.
+   * **Thread 2 (Simultaneous)**: Blocks at database level waiting for the lock. Upon acquiring the lock, it immediately reads the updated state: `BOOKED`.
+   * **Safe Conflict Rejection**: Throws `SeatAlreadyBookedException`, triggering an immediate database rollback and returning HTTP **`409 Conflict`** with message: `"Seat 1A is already booked for this trip"`.
+3. **Database-Level Unique Constraints**:
+   A composite unique constraint on `(trip_id, seat_number)` guarantees at the relational engine level that two confirmed bookings can never point to the same seat.
+4. **Multi-Threaded Test Proof**:
+   `BookingConcurrencyTest` executes 10 concurrent threads against the identical seat via `ExecutorService`. Exactly 1 thread succeeds (201 Created) and 9 fail safely (409 Conflict) with zero duplicate PNRs.
+
+---
+
+## 6. Assumptions and Design Trade-offs
+* **Scope Discipline (Per Brief § 1 & § 7)**: Omitted consumer passenger web/mobile screens to focus 100% of engineering bandwidth on core API correctness, non-root containerization, network isolation, CI/CD, and disaster recovery.
+* **Mocked Payment Verification**: Commercial payment gateway webhooks (e.g. Razorpay/Stripe) are mocked with transactional payment tokens to eliminate third-party credentials and keep the build completely zero-cost and reproducible.
+* **UTC Timestamps**: All trip schedules and booking timestamps are persisted as absolute UTC values to prevent regional timezone confusion.
+* **Audit-Preserving Cancellations**: Cancelled bookings are updated to `CANCELLED` status and seats are atomically returned to `AVAILABLE`, preserving historical audit records.
+* **Dual-Network Isolation**: The application container bridges both `frontend-net` and `backend-net`, while PostgreSQL and Redis reside strictly on `backend-net` (`internal: true`) with **zero host port exposure**.
+* **Test Isolation**: Maven automated tests run against an in-memory H2 database for rapid CI builds; full PostgreSQL integration tests run in the Dockerized container pipeline.
+
+---
+
+## 7. API Endpoints
+
+### Health & Observability (Actuator)
+| Method | Endpoint | Description | Expected Status |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/actuator/health/liveness` | Container process liveness probe | `200 OK` (`UP`) |
+| `GET` | `/actuator/health/readiness`| Dependency readiness probe (Database connectivity check) | `200 OK` (`UP`) |
+| `GET` | `/actuator/prometheus` | Prometheus operational metrics scrape endpoint | `200 OK` |
+
+### Bus Routes & Trips
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/v1/routes` | List all active bus transit routes |
+| `GET` | `/api/v1/trips` | Search scheduled trips (filters: `origin`, `destination`, `date`) |
+| `GET` | `/api/v1/trips/{tripId}` | Retrieve specific trip details |
+| `GET` | `/api/v1/trips/{tripId}/seats` | Real-time seat availability map |
+
+### Bookings & Reservations
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `POST` | `/api/v1/bookings` | Atomic seat reservation (concurrency safe) |
+| `GET` | `/api/v1/bookings/{pnr}` | Retrieve booking & ticket details by PNR |
+| `POST` | `/api/v1/bookings/{pnr}/cancel` | Cancel booking and release seat back to inventory |
+
+---
+
+## 8. Environment Variables & Port Map
+
+### Network Port Allocation Map
 | Service | Container Name | Host Port | Internal Port | Network Binding | Purpose |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Edge Proxy** | `algion-nginx-proxy` | `80` (HTTP) | `80` | `frontend-net` | Auto-redirects all traffic to HTTPS (301 Moved Permanently) |
-| **Secure Ingress**| `algion-nginx-proxy` | `443` (HTTPS) | `443` | `frontend-net` | SSL/TLS Termination, Rate Limiting (100 req/min), Upstream Routing |
-| **Spring Boot API**| `algion-bus-booking-api`| *None (Shielded)*| `8080` | `frontend-net`, `backend-net` | Core Domain Service, Actuator Probes, Swagger UI |
-| **PostgreSQL 16** | `algion-postgres-db` | *None (Shielded)*| `5432` | `backend-net` (`internal: true`)| Primary ACID Store, Pessimistic Row Locking, Persistent Volume |
-| **Redis 7** | `algion-redis-cache` | *None (Shielded)*| `6379` | `backend-net` (`internal: true`)| High-speed cache for routes and seat availability |
+| **Edge Proxy** | `algion-nginx-proxy` | `80` (HTTP) | `80` | `frontend-net` | Auto-redirects to HTTPS (301 Permanent) |
+| **Secure Ingress** | `algion-nginx-proxy` | `443` (HTTPS) | `443` | `frontend-net` | TLS 1.3 Termination, Rate Limiting (100 req/min) |
+| **Spring Boot API**| `algion-bus-booking-api`| *Shielded* | `8080` | `frontend-net`, `backend-net` | Core Domain Service, Actuator, Swagger UI |
+| **PostgreSQL 16** | `algion-postgres-db` | *Shielded* | `5432` | `backend-net` (`internal: true`) | Primary ACID Store, Row-Level Locking |
+| **Redis 7** | `algion-redis-cache` | *Shielded* | `6379` | `backend-net` (`internal: true`) | High-speed cache for routes and seat availability |
 
-> [!SECURITY NOTE]
-> Ports `8080`, `5432`, and `6379` are deliberately **not exposed** to the host machine. All external traffic must pass through the Nginx reverse proxy over HTTPS.
-
----
-
-### 2.8 Environment Configuration Variables
-
-All operational variables are loaded through `.env` (validated against `.env.example`):
-
+### Environment Configuration (`.env`)
 | Variable Name | Default / Example Value | Description |
 | :--- | :--- | :--- |
-| `SPRING_PROFILES_ACTIVE` | `docker` | Activates Docker-specific Spring profiles and datasource configs |
-| `SPRING_DATASOURCE_URL` | `jdbc:postgresql://postgres:5432/bus_booking_db` | Direct JDBC connection string to the isolated container |
+| `SPRING_PROFILES_ACTIVE` | `docker` | Activates Docker profile configurations |
+| `SPRING_DATASOURCE_URL` | `jdbc:postgresql://postgres:5432/bus_booking_db` | JDBC connection string inside `backend-net` |
 | `SPRING_DATASOURCE_USERNAME`| `postgres` | Database superuser account |
 | `SPRING_DATASOURCE_PASSWORD`| *(Strong secret from .env)* | Database password (never committed to Git) |
-| `SPRING_DATA_REDIS_HOST` | `redis` | Internal hostname for the in-memory cache |
+| `SPRING_DATA_REDIS_HOST` | `redis` | In-memory cache hostname |
 | `SPRING_DATA_REDIS_PORT` | `6379` | Redis port on isolated backend network |
-| `APP_PORT` | `8080` | Internal container port for the Java microservice |
+| `APP_PORT` | `8080` | Application container port |
 | `RATE_LIMIT_PER_MINUTE` | `100` | Nginx leaky-bucket rate limiting threshold per client IP |
+| `DOCKERHUB_USERNAME` | `shyammedh` | Docker Hub username for container registry |
+| `DOCKERHUB_TOKEN` | *(Personal Access Token)* | Personal access token for Docker Hub push/pull |
 
 ---
 
-## 3. Technology Stack Summary
+## 9. Local Setup Instructions
 
-| Layer | Technology | Version | Purpose |
-| :--- | :--- | :--- | :--- |
-| **Backend Service** | Java + Spring Boot | Java 21 LTS / Spring Boot 3.3.x | Enterprise domain service, Spring Data JPA, Actuator |
-| **Primary Database** | PostgreSQL | 16-Alpine | ACID transactions, row-level locking (`SELECT ... FOR UPDATE`), persistent storage |
-| **Read Replica** | PostgreSQL | 16-Alpine | Read scaling, offloads route & trip searches |
-| **Cache Layer** | Redis | 7-Alpine | In-memory cache for routes, trips, and seat maps; cache-aside with invalidation |
-| **Reverse Proxy** | Nginx | 1.25-Alpine | TLS 1.3 termination, rate limiting, security headers, zero-downtime routing |
-| **Containerization** | Docker & Compose | Multi-Stage | Non-root user (`appuser`), internal network isolation |
-| **CI/CD** | Jenkins & GitHub Actions | Declarative | Automated test execution, Trivy container security scans, version tagging |
-| **Observability** | Prometheus & Grafana | Latest | Scrapes Spring Actuator metrics; visualizes latency, TPS, DB pool |
-| **Infrastructure (IaC)** | Terraform (AWS) | 1.15.x | Automated provisioning of AWS VPC, RDS Multi-AZ + Read Replica, EC2, ECR |
-
----
-
-## 4. Quickstart Guide (1-Command Local Execution)
-
-### 4.1 Prerequisites
-- Docker & Docker Compose
-- Java 21 LTS & Maven 3.9+ (optional for local JAR builds)
-
-### 4.2 Start the Complete Platform
-Clone the repository and launch all services:
+### Option A: 1-Command Startup (Recommended)
+Ensure Docker & Docker Compose are running:
 ```bash
 # 1. Clone repository
 git clone https://github.com/shyam-medh/ALGION-DevOps-Intern-Bus-Booking-Platform-.git
@@ -261,42 +238,110 @@ cd ALGION-DevOps-Intern-Bus-Booking-Platform-
 # 2. Copy environment template
 cp .env.example .env
 
-# 3. Launch all containers
+# 3. Launch complete containerized platform
 docker compose up -d --build
 ```
 
-### 4.3 Verify Running Services
+### Option B: Pull Pre-built Image from Docker Hub
+```bash
+docker pull shyammedh/bus-booking-platform:1.0.0
+docker compose up -d
+```
+
+### Verify Running Services
 ```bash
 docker compose ps
 ```
-All four containers (`algion-bus-booking-api`, `algion-postgres-db`, `algion-redis-cache`, `algion-nginx-proxy`) will report **`(healthy)`**.
+*All 4 containers (`algion-nginx-proxy`, `algion-bus-booking-api`, `algion-postgres-db`, `algion-redis-cache`) will report `healthy`.*
 
 ---
 
-## 5. API Reference & Verification Examples
+## 10. Testing
+The repository contains a comprehensive automated test suite covering JPA mappings, REST contract MockMvc tests, Actuator health indicator assertions, and multi-threaded race condition validations:
 
-### 5.1 Route Discovery
+```bash
+cd trip_and_reservation_seat
+mvn clean test
+```
+
+### Test Results
+```text
+[INFO] Running com.algion.busbooking.ActuatorHealthTest
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Running com.algion.busbooking.BookingConcurrencyTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Running com.algion.busbooking.BookingControllerTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Running com.algion.busbooking.RepositoryMappingTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Running com.algion.busbooking.RouteControllerTest
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Running com.algion.busbooking.TripControllerTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] Total tests run: 17, Failures: 0, Errors: 0, Skipped: 0
+[INFO] ------------------------------------------------------------------------
+```
+
+---
+
+## 11. API Documentation (Swagger UI)
+Once launched, the interactive Swagger UI and raw OpenAPI 3.0 specifications are served directly over HTTPS:
+* **Interactive Swagger UI**: `https://localhost/swagger-ui/index.html`
+* **Raw OpenAPI JSON Spec**: `https://localhost/v3/api-docs`
+
+---
+
+## 12. Submission / Demo Verification Guide
+Reviewers can verify all 5 acceptance criteria in under 5 minutes:
+
+1. **Service Health Probes**:
+   ```bash
+   curl -k https://localhost/actuator/health/readiness
+   # Expected: {"status":"UP","components":{"db":{"status":"UP"}}}
+   ```
+2. **Route & Trip Browsing**:
+   ```bash
+   curl -k https://localhost/api/v1/routes
+   curl -k "https://localhost/api/v1/trips?origin=Mumbai&destination=Pune"
+   ```
+3. **Atomic Concurrency Test (Pessimistic Locking)**:
+   - Book seat `1A`: Returns `201 Created` with unique PNR.
+   - Attempt to book seat `1A` again: Immediately returns **`409 Conflict`** (`"Seat 1A is already booked"`).
+4. **Failure Detection & Auto-Recovery**:
+   - Stop database: `docker stop algion-postgres-db`
+   - Readiness immediately signals failure: `curl -k -i https://localhost/actuator/health/readiness` &rarr; **`503 Service Unavailable`**.
+   - Restart database: `docker start algion-postgres-db` &rarr; Recovers to **`200 OK`** without application restart.
+5. **Disaster Recovery Backup**:
+   - Run `bash scripts/backup-db.sh` &rarr; Generates gzip archive with SHA-256 integrity hash in `backups/`.
+
+---
+
+## 13. Example API Flow (End-to-End)
+
+### 1. Discover Routes
 ```bash
 curl -k https://localhost/api/v1/routes
 ```
 
-### 5.2 Search Trips
+### 2. Search Available Trips
 ```bash
 curl -k "https://localhost/api/v1/trips?origin=Mumbai&destination=Pune"
 ```
 
-### 5.3 Fetch Real-Time Seat Availability
+### 3. Check Real-Time Seat Map
 ```bash
-# Replace TRIP_ID with an ID returned from the search above
+# Substitute TRIP_ID from step 2
 curl -k https://localhost/api/v1/trips/{TRIP_ID}/seats
 ```
 
-### 5.4 Reserve a Seat (Atomic Concurrency-Safe Booking)
+### 4. Book a Seat (Atomic Reservation)
 ```bash
 curl -k -X POST https://localhost/api/v1/bookings \
   -H "Content-Type: application/json" \
   -d '{
-    "tripId": "TRIP_UUID_HERE",
+    "tripId": "b1a7d6e2-9c3f-4e1a-8f5b-123456789abc",
     "travelDate": "2026-11-20",
     "boardingStop": "Dadar, Mumbai",
     "dropStop": "Swargate, Pune",
@@ -313,52 +358,42 @@ curl -k -X POST https://localhost/api/v1/bookings \
     ]
   }'
 ```
-*Returns `201 Created` with unique secure PNR `ALG-2026-XXXX`. A simultaneous booking for `1A` returns `409 Conflict`.*
+*Returns `201 Created` with secure PNR `ALG-2026-XXXX`.*
 
-### 5.5 PNR Ticket Lookup & Cancellation
+### 5. Lookup Booking by PNR
 ```bash
-# Lookup by PNR
 curl -k https://localhost/api/v1/bookings/ALG-2026-XXXX
+```
 
-# Cancel and release seat
+### 6. Cancel Booking and Release Seat
+```bash
 curl -k -X POST https://localhost/api/v1/bookings/ALG-2026-XXXX/cancel
 ```
 
 ---
 
-## 6. Automated Testing Suite
+## 14. Production DevOps & Cloud Infrastructure
 
-Run the full automated test suite (including the 10-thread simultaneous race condition test and MockMvc HTTP contract tests):
+### Zero-Downtime Blue-Green Deployment
+The system utilizes dual container slots (`app-blue` on port 8081 and `app-green` on port 8082).
 ```bash
-cd trip_and_reservation_seat
-mvn clean test
+bash scripts/deploy-blue-green.sh
 ```
-*Result: **17/17 tests passing (`BUILD SUCCESS`)**.*
+1. Spawns the target idle slot with the new image.
+2. Polls `/actuator/health/readiness` until returning `UP`.
+3. Switches Nginx upstream dynamically and executes `nginx -s reload` (hot reload, zero packet loss).
+4. Gracefully terminates the old container.
+5. In case of issues, `bash scripts/rollback.sh` triggers a sub-second instant revert.
 
----
+### CI/CD Pipeline (`.github/workflows/ci-cd.yml` & `Jenkinsfile`)
+* **Linting & Code Quality**: Validates Maven POM and executes compiler checks.
+* **Unit & Concurrency Tests**: Executes all 17 tests with fail-fast policy.
+* **Container Security Vulnerability Scanning**: Aqua Security Trivy scans container images for CRITICAL/HIGH CVEs before release.
+* **Registry Publishing**: Automatically tags and pushes images to Docker Hub (`shyammedh/bus-booking-platform:1.0.0` and `latest`) and Amazon ECR.
 
-## 7. Operations, CI/CD & Infrastructure Links
-
-- **Production SRE Runbook**: [`RUNBOOK.md`](RUNBOOK.md)
-- **Zero-Downtime Blue-Green Deployment Script**: [`scripts/deploy-blue-green.sh`](scripts/deploy-blue-green.sh)
-- **Emergency Rollback Script**: [`scripts/rollback.sh`](scripts/rollback.sh)
-- **Automated Backup & Restore Scripts**: [`scripts/backup-db.sh`](scripts/backup-db.sh) / [`scripts/restore-db.sh`](scripts/restore-db.sh)
-- **Chaos Recovery Drill**: [`scripts/chaos-drill.sh`](scripts/chaos-drill.sh)
-- **CI/CD Pipeline**: [`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml) and [`Jenkinsfile`](Jenkinsfile)
-- **AWS Terraform Configuration**: [`terraform/`](terraform/)
-
----
-
-## 8. Scope Boundaries, Assumptions & Known Limitations
-
-Per the assessment brief (*Section 1 & Section 7: "Build a strong, correct MVP rather than many incomplete screens. State clearly what is unfinished."*):
-
-1. **Allocated Service Scope (In-Scope)**:
-   - Complete backend lifecycle for bus routes, scheduled trips, dynamic seat availability maps, concurrency-safe seat booking with pessimistic row-locking (`PESSIMISTIC_WRITE`), PNR ticket generation, and booking cancellation with atomic seat release.
-   - Comprehensive DevOps deliverables: Multi-stage non-root containerization, internal Docker networking isolation, Nginx reverse proxy with TLS and rate-limiting, Blue-Green zero-downtime deployment engine, disaster recovery backup/restore with SHA-256 validation, Prometheus observability probes, and modular AWS Terraform IaC.
-2. **Intentionally Out of Scope (By Design)**:
-   - **Frontend UI Client**: Omitted in strict compliance with the brief's directive to prioritize release engineering, reliability, and operations over consumer screen breadth.
-   - **Live Commercial Payment Gateway**: Payment credentials and third-party webhooks (e.g. Razorpay/Stripe) are mocked out to avoid committing live secrets or requiring paid external sandbox credentials.
-   - **Multi-region Global Replication**: The relational database is architected for single-region Multi-AZ deployment (as modelled in `terraform/modules/rds`), with synchronous primary-replica replication. Multi-region active-active database replication is considered out of scope for this individual microservice.
-
-
+### Infrastructure as Code (Terraform)
+Located in `terraform/`:
+* Multi-AZ AWS VPC with public/private subnet topology and Internet Gateway.
+* Least-privilege Security Groups isolating Application Load Balancers, ECS/EC2 compute, and RDS.
+* Multi-AZ PostgreSQL RDS module with automated daily backups and storage encryption.
+* Amazon ECR repository with scan-on-push enabled.
