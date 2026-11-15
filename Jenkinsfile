@@ -99,6 +99,28 @@ pipeline {
             }
         }
 
+        stage('Terraform Infrastructure Provisioning') {
+            when {
+                branch 'main'
+            }
+            steps {
+                dir('terraform') {
+                    sh """
+                        echo "=== Initializing and Validating AWS Terraform Infrastructure ==="
+                        terraform init -input=false
+                        terraform validate
+                        terraform plan -input=false -out=tfplan
+                        if [ -f "terraform.tfvars" ]; then
+                            echo "terraform.tfvars found. Applying Terraform changes to AWS..."
+                            terraform apply -input=false -auto-approve tfplan
+                        else
+                            echo "terraform.tfvars template present. Plan and syntax validated successfully."
+                        fi
+                    """
+                }
+            }
+        }
+
         stage('Blue-Green Deploy') {
             when {
                 branch 'main'
